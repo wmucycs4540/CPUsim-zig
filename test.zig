@@ -3,7 +3,12 @@ const std = @import("std");
 const print = std.debug.print;
 
 // struct (to add start_t,fin_t, norm_tt)
-const Data = struct { pid: []const u8 , at: u8, bt: u8, tt: u8};
+const Data = struct {
+    pid: []const u8,
+    at: u8,
+    bt: u8,
+    tt: u8,
+};
 
 
 // comparator functions - zig.sort
@@ -47,7 +52,7 @@ pub fn main() !void {
         const p = Data{
             .pid = if (std.ascii.eqlIgnoreCase(tok1, " "))    // implement find I/O burst error
                 return error.ioerror
-            else    
+            else
                 try allocator.dupe(u8, tok1),
             .at = std.fmt.parseInt(u8, tok2, 10) catch return error.UnableToParseArrival,
             .bt = std.fmt.parseInt(u8, tok3, 10) catch return error.UnableToParseBurst,
@@ -64,12 +69,12 @@ pub fn main() !void {
 
 
 // FCFS (without I/O burst handling)
-pb fn FF(processes) !void {
+pub fn FF(processes) !void {
     var sum: u8 = 0;
     var x: u8 = 0;
     std.sort.sort(Data, processes.items, {}, cmpByData);
-    
-    for (processes.items) |p| {  
+
+    for (processes.items) |p| {
         x = p.bt;
         var ans = sum - p.at;      // need to append to struct member (currently just prints)
         sum += p.bt;
