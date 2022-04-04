@@ -1,6 +1,7 @@
 // helpers
 const std = @import("std");
 const print = std.debug.print;
+const Queue = @import("./queue.zig").Queue;
 
 const Error = error {
     InvalidArgs,
@@ -159,7 +160,9 @@ const Scheduler = struct {
     }
 
     pub fn tick(self: *Self, gpa: std.mem.Allocator) !bool {
-        if (!self.nextToReadyQueue()) return false;
+        if (!self.nextToReadyQueue()) {
+            // return false;
+        }
 
         if (self.current) |*curr| {
             if (curr.remaining_time <= 0) {
@@ -215,8 +218,17 @@ const Scheduler = struct {
     pub fn resultToString(self: Self, gpa: std.mem.Allocator) ![]u8 {
         var string = std.ArrayList(u8).init(gpa);
         for (self.finished.items) |proc| {
-            print("{}", .{proc});
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{s}", .{proc.pid}));
+            print("{}\n", .{proc});
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "\"{s}\",", .{proc.pid}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.arrival_time}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.service_time}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.start_time}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.total_wait()}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.finish_time}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.turnaround_time()}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.norm_turnaround()}));
+            try string.appendSlice("\n");
+
         }
         return string.items;
     }
@@ -283,10 +295,11 @@ pub fn main() !void {
         if (std.mem.eql(u8, tok1, " ")) {
             const last = processes.items.len - 1;
             try processes.items[last].io_bursts.append(.{arrival, service});
-        } else if (!std.mem.eql(u8, tok1, "")) {
+        } else if (!std.mem.eql(u8, tok1, "") and tok1.len == 1) {
             const p = Proc.init(gpa, try gpa.dupe(u8, tok1), arrival, service);
             try processes.append(p);
         } else {
+            print("{any} {}\n", .{tok1, tok1.len});
             return Error.InvalidInput;
         }
     }
