@@ -28,5 +28,4 @@ pub fn Queue(comptime T: type) type {
             return if (self.items.items.len == 0) null else self.items.orderedRemove(index);
         }
     };
->>>>>>> origin/main
 }
