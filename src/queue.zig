@@ -1,37 +1,31 @@
-// deque.rotate() function
-pub fn rotate(slice, n) {
-    for (index) |i| {
-        const temp = slice[0];
-        std.mem.copy(u8, slice[0..slice.len - 1], slice[1..]);
-        slice[slice.len - 1] = temp;
-    }
-    return slice;
-}
+const std = @import("std");
 
-// usage (Queue(Proc){}).function()
-pub fn Queue(comptime Proc: struct) = type {
-
+pub fn Queue(comptime T: type) type {
     return struct {
-    const Self = @This();
+        const Self = @This();
 
-        pub fn peek(self: Self) ?u64 {
-            return if (self.pid.len > 0) self.pid else null;
+        items: std.ArrayList(T),
+
+        pub fn init(gpa: std.mem.Allocator) Self {
+            return Self {
+                .items = std.ArrayList(T).init(gpa),
+            };
         }
 
-        pub fn enque(self: Self, e: u64) {
-            self.append(e);
+        pub fn peek(self: Self) ?T {
+            return if (self.items.items.len == 0) null else self.items.items[0];
         }
 
-        pub fn deque(self: Self) {
-            return if (self.len > 0) self.appendAssumeCapacity(self.orderedRemove(0)) else null;
+        pub fn enque(self: Self, item: T) void {
+            self.items.append(item);
         }
 
-        pub fn deque_at(self: Self, index: u64) {
-            var r = self.len - index - 1;
-            rotate(self, index);
-            var e = self.deque();
-            rotate(self, r);
-            return e;
+        pub fn deque(self: Self) ?T {
+            return if (self.items.items.len == 0) null else self.items.orderedRemove(0);
         }
-    }
+
+        pub fn deque_at(self: Self, index: usize) ?T {
+            return if (self.items.items.len == 0) null else self.items.orderedRemove(index);
+        }
+    };
 }
