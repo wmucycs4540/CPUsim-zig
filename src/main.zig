@@ -1,4 +1,3 @@
-// helpers
 const std = @import("std");
 const print = std.debug.print;
 const Queue = @import("./queue.zig").Queue;
@@ -9,7 +8,6 @@ const Error = error {
     ParseInt,
 };
 
-// struct (to add start_t,fin_t, norm_tt)
 const Proc = struct {
     const Self = @This();
 
@@ -80,10 +78,10 @@ const SchedulerMeta = union(SchedulerKind) {
 const Scheduler = struct {
     const Self = @This();
 
-    arrival_que: std.ArrayList(Proc),
-    ready_que: std.ArrayList(Proc),
-    iowait_que: std.ArrayList(Proc),
-    finished: std.ArrayList(Proc),
+    arrival_que: Queue(Proc),
+    ready_que: Queue(Proc),
+    iowait_que: Queue(Proc),
+    finished: Queue(Proc),
 
     current: ?Proc = null,
 
@@ -91,13 +89,13 @@ const Scheduler = struct {
     total_procs: u64 = 0,
     kind: SchedulerMeta,
 
-    pub fn init(gpa: std.mem.Allocator, kind: SchedulerMeta, arrival: std.ArrayList(Proc)) Self {
+    pub fn init(gpa: std.mem.Allocator, kind: SchedulerMeta, arrival: Queue(Proc)) Self {
         return Self {
             .kind = kind,
             .arrival_que = arrival,
-            .ready_que = std.ArrayList(Proc).init(gpa),
-            .iowait_que = std.ArrayList(Proc).init(gpa),
-            .finished = std.ArrayList(Proc).init(gpa),
+            .ready_que = Queue(Proc).init(gpa),
+            .iowait_que = Queue(Proc).init(gpa),
+            .finished = Queue(Proc).init(gpa),
         };
     }
     pub fn deinit(self: Self) void {
@@ -107,65 +105,65 @@ const Scheduler = struct {
 
     /// First-Come-First-Served Scheduler
     fn ffSelect(self: *Self) ?Proc {
-        if (self.ready_que.items.len == 0) return null;
+        if (self.ready_que.len() == 0) return null;
         var cmp = @as(u64, 0);
         var idx = @as(u64, 0);
-        for (self.ready_que.items) |proc, i| {
+        for (self.ready_que.iter()) |proc, i| {
             if (proc.total_wait() > cmp) {
                 cmp = proc.total_wait();
                 idx = i;
             }
         }
-        return self.ready_que.orderedRemove(idx);
+        return self.ready_que.deque_at(idx);
     }
 
     /// Round Robbin (with quant)
     fn rrSelect(self: *Self) ?Proc {
-        if (self.ready_que.items.len == 0) return null;
-        return self.ready_que.orderedRemove(0);
+        if (self.ready_que.len() == 0) return null;
+        return self.ready_que.deque();
     }
 
     /// Shortest Process Next Scheduler
     fn spSelect(self: *Self) ?Proc {
-        if (self.ready_que.items.len == 0) return null;
+        if (self.ready_que.len() == 0) return null;
         var cmp = @as(u64, std.math.maxInt(u64));
         var idx = @as(u64, 0);
-        for (self.ready_que.items) |proc, i| {
+        for (self.ready_que.iter()) |proc, i| {
             if (proc.service_time < cmp) {
                 cmp = proc.service_time;
                 idx = i;
             }
         }
-        return self.ready_que.orderedRemove(idx);
+        return self.ready_que.deque_at(idx);
     }
 
     /// Shortest Remaining Time
     fn srSelect(self: *Self) ?Proc {
-        if (self.ready_que.items.len == 0) return null;
+        if (self.ready_que.len() == 0) return null;
         var cmp = @as(u64, std.math.maxInt(u64));
         var idx = @as(u64, 0);
-        for (self.ready_que.items) |proc, i| {
+        for (self.ready_que.iter()) |proc, i| {
             if (proc.remaining_time < cmp) {
                 cmp = proc.remaining_time;
                 idx = i;
             }
         }
-        return self.ready_que.orderedRemove(idx);
+        return self.ready_que.deque_at(idx);
     }
 
     /// Highest Response Ratio Next
     fn hrSelect(self: *Self) ?Proc {
-        if (self.ready_que.items.len == 0) return null;
+        if (self.ready_que.len() == 0) return null;
         var cmp = @as(u64, 0);
         var idx = @as(u64, 0);
-        for (self.ready_que.items) |proc, i| {
+        for (self.ready_que.iter()) |proc, i| {
             const check = (proc.total_wait() + proc.service_time) / proc.service_time;
             if (check > cmp) {
                 cmp = check;
                 idx = i;
             }
         }
-        return self.ready_que.orderedRemove(idx);
+        return self.ready_que.deque_at(idx);
     }
 
     /// Facebook
@@ -175,13 +173,13 @@ const Scheduler = struct {
     }
 
     pub fn nextToReadyQueue(self: *Self) bool {
-        const index = loop: for (self.arrival_que.items) |p, i| {
+        const index = loop: for (self.arrival_que.iter()) |p, i| {
             if (p.arrival_time <= self.clock) {
                 break :loop i;
             }
         } else return false;
 
-        self.ready_que.append(self.arrival_que.orderedRemove(index)) catch unreachable;
+        self.ready_que.enque(self.arrival_que.deque_at(index).?);
         return true;
     }
 
@@ -195,7 +193,12 @@ const Scheduler = struct {
             // .fb => |fb_sel| fb_sel.select(self),
             else => unreachable,
         };
-        if (proc) |*p| p.start_time = self.clock;
+        if (proc) |*p| {
+            if (!p.started) {
+                p.start_time = self.clock;
+                p.started = true;
+            }
+        }
         return proc;
     }
 
@@ -204,51 +207,65 @@ const Scheduler = struct {
         if (self.current) |*curr| {
             if (curr.remaining_time <= 0) {
                 curr.finish_time = self.clock;
-                try self.finished.append(curr.*);
+                self.finished.enque(curr.*);
                 self.current = self.select();
-            } else if (curr.io_bursts.items.len > 0
-                and (curr.service_time - curr.remaining_time) == curr.io_bursts.items[0][0]
-            ) {
-                try self.iowait_que.append(curr.*);
-                self.current = self.select();
+            } else if (curr.io_bursts.items.len > 0) {
+                if ((curr.service_time - curr.remaining_time) == curr.io_bursts.items[0][0]) {
+                    self.iowait_que.enque(curr.*);
+                    self.current = self.select();
+                }
             } else if (self.kind == SchedulerKind.rr and curr.time_in_cpu == self.kind.rr.quant) {
                 curr.time_in_cpu = 0;
-                try self.ready_que.append(curr.*);
+                self.ready_que.enque(curr.*);
                 self.current = self.select();
             } else if (self.kind == SchedulerKind.sr and new_arrival) {
-                try self.ready_que.append(curr.*);
+                self.ready_que.enque(curr.*);
                 self.current = self.select();
             }
         } else {
             self.current = self.select();
         }
 
-        if (self.finished.items.len == self.total_procs) {
+        if (self.finished.len() == self.total_procs) {
             return false;
         }
+
+        const none: []const u8 = "";
+        const comma: []const u8 = ", ";
+        print("{:>3}: {s} | arrived = {{", .{self.clock, self.current.?.pid });
+        const alen = self.arrival_que.len();
+        for (self.arrival_que.iter()) |a, i| {
+            const end = if ((i + 1) == alen) none else comma;
+            print("{s}{s}", .{a.pid, end});
+        }
+        print("}}", .{});
+        print(" ready = {{", .{});
+        const rlen = self.ready_que.len();
+        for (self.ready_que.iter()) |r, i| {
+            const end = if ((i + 1) == rlen) none else comma;
+            print("{s}{s}", .{r.pid, end});
+        }
+        print("}}\n", .{});
 
         self.current.?.remaining_time -= 1;
         self.current.?.time_in_cpu += 1;
 
-        for (self.ready_que.items) |*ready| {
+        for (self.ready_que.iter()) |*ready| {
             ready.time_in_ready += 1;
         }
 
         var removed = std.ArrayList(u64).init(gpa);
         defer removed.deinit();
-        for (self.iowait_que.items) |*wait, i| {
+        for (self.iowait_que.iter()) |*wait, i| {
             wait.time_in_io_wait += 1;
-
-            if (wait.io_bursts.items.len > 0) {
-                wait.io_bursts.items[0][1] -= 1;
-                if (wait.io_bursts.items[0][1] == 0) {
-                    _ = wait.io_bursts.orderedRemove(0);
-                    try removed.append(i);
-                }
+            wait.io_bursts.items[0][1] -= 1;
+            if (wait.io_bursts.items[0][1] <= 0) {
+                _ = wait.io_bursts.orderedRemove(0);
+                try removed.append(i);
             }
         }
         for (removed.items) |idx| {
-            try self.ready_que.append(self.iowait_que.orderedRemove(idx));
+            self.ready_que.enque(self.iowait_que.deque_at(idx).?);
         }
 
         self.clock += 1;
@@ -256,7 +273,7 @@ const Scheduler = struct {
     }
 
     pub fn run(self: *Self, gpa: std.mem.Allocator) !void {
-        self.total_procs = self.arrival_que.items.len;
+        self.total_procs = self.arrival_que.len();
         while (try self.tick(gpa)) {}
     }
 
@@ -264,8 +281,7 @@ const Scheduler = struct {
         var string = std.ArrayList(u8).init(gpa);
         var tt = @as(f32, 0.0);
         var tn = @as(f32, 0.0);
-        for (self.finished.items) |proc| {
-            print("{}\n", .{proc});
+        for (self.finished.iter()) |proc| {
             try string.appendSlice(try std.fmt.allocPrint(gpa, "\"{s}\", ", .{proc.pid}));
             try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.arrival_time}));
             try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.service_time}));
@@ -325,7 +341,7 @@ pub fn main() !void {
     defer file.close();
     const file_reader = std.io.bufferedReader(file.reader()).reader();
 
-    var processes = std.ArrayList(Proc).init(gpa);
+    var processes = Queue(Proc).init(gpa);
     defer processes.deinit();
     while (try file_reader.readUntilDelimiterOrEofAlloc(gpa, '\n', std.math.maxInt(u16))) |line| {
         if (std.mem.startsWith(u8, line, "#") or std.mem.startsWith(u8, line, "\n") or line.len == 0) {
@@ -353,11 +369,11 @@ pub fn main() !void {
         };
 
         if (std.mem.eql(u8, proc_pid, " ") or proc_pid.len == 0) {
-            const last = processes.items.len - 1;
-            try processes.items[last].io_bursts.append(.{arrival, service});
+            const last = processes.len() - 1;
+            try processes.items.items[last].io_bursts.append(.{arrival, service});
         } else if (proc_pid.len == 1) {
             const p = Proc.init(gpa, try gpa.dupe(u8, proc_pid), arrival, service);
-            try processes.append(p);
+            processes.enque(p);
         } else {
             print("`{s}`\n", .{proc_pid});
             return Error.InvalidInput;
