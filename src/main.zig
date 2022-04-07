@@ -38,8 +38,8 @@ const Proc = struct {
     pub fn turnaround_time(self: Self) u64 {
         return self.finish_time - self.arrival_time;
     }
-    pub fn norm_turnaround(self: Self) u64 {
-        return self.turnaround_time() / self.service_time;
+    pub fn norm_turnaround(self: Self) f32 {
+        return @intToFloat(f32, self.turnaround_time()) / @intToFloat(f32, self.service_time);
     }
 
     pub fn total_wait(self: Self) u64 {
@@ -151,12 +151,14 @@ const Scheduler = struct {
     }
 
     fn select(self: *Self) ?Proc {
-        return switch (self.kind) {
+        var proc = switch (self.kind) {
             .ff => |ff_sel| ff_sel.select(self),
             .sp => |sp_sel| sp_sel.select(self),
             .hr => |hr_sel| hr_sel.select(self),
             else => unreachable,
         };
+        if (proc) |*p| p.start_time = self.clock;
+        return proc;
     }
 
     pub fn tick(self: *Self, gpa: std.mem.Allocator) !bool {
@@ -226,7 +228,7 @@ const Scheduler = struct {
             try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.total_wait()}));
             try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.finish_time}));
             try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.turnaround_time()}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.norm_turnaround()}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{d:.2}", .{proc.norm_turnaround()}));
             try string.appendSlice("\n");
 
         }
@@ -277,29 +279,38 @@ pub fn main() !void {
     var processes = std.ArrayList(Proc).init(gpa);
     defer processes.deinit();
     while (try file_reader.readUntilDelimiterOrEofAlloc(gpa, '\n', std.math.maxInt(u16))) |line| {
+        if (std.mem.startsWith(u8, line, "#") or std.mem.startsWith(u8, line, "\n") or line.len == 0) {
+            continue;
+        }
         var splitter = std.mem.split(u8, line, ",");
+        var proc_pid = splitter.next() orelse return Error.InvalidInput;
+        // Strip BOM (byte order mark) from input_simple.csv
+        if (std.mem.startsWith(u8, proc_pid, @as([]const u8, &.{239, 187, 191 }))) {
+            proc_pid = proc_pid[3..];
+        }
+        proc_pid = std.mem.trim(u8, proc_pid, "\"");
 
-        const tok1 = splitter.next() orelse return Error.InvalidInput;
+        var ariv_str = splitter.next() orelse { print("`{s}`\n", .{line}); return Error.InvalidInput; };
+        ariv_str = std.mem.trim(u8, ariv_str, " ");
+        const arrival = std.fmt.parseInt(u64, ariv_str, 10) catch {
+            print("`{s}`\n", .{ariv_str});
+            return Error.ParseInt;
+        };
+        var serv_str = splitter.next() orelse { print("`{s}`\n", .{line}); return Error.InvalidInput; };
+        serv_str = std.mem.trim(u8, serv_str, " ");
+        const service = std.fmt.parseInt(u64, serv_str, 10) catch {
+            print("`{s}`\n", .{serv_str});
+            return Error.ParseInt;
+        };
 
-        const arrival = try std.fmt.parseInt(
-            u64,
-            splitter.next() orelse return Error.InvalidInput,
-            10
-        );
-        const service = try std.fmt.parseInt(
-            u64,
-            splitter.next() orelse return Error.InvalidInput,
-            10
-        );
-
-        if (std.mem.eql(u8, tok1, " ")) {
+        if (std.mem.eql(u8, proc_pid, " ") or proc_pid.len == 0) {
             const last = processes.items.len - 1;
             try processes.items[last].io_bursts.append(.{arrival, service});
-        } else if (!std.mem.eql(u8, tok1, "") and tok1.len == 1) {
-            const p = Proc.init(gpa, try gpa.dupe(u8, tok1), arrival, service);
+        } else if (proc_pid.len == 1) {
+            const p = Proc.init(gpa, try gpa.dupe(u8, proc_pid), arrival, service);
             try processes.append(p);
         } else {
-            print("{any} {}\n", .{tok1, tok1.len});
+            print("`{s}`\n", .{proc_pid});
             return Error.InvalidInput;
         }
     }

@@ -1,7 +1,7 @@
 import csv
 
-from .proc import Proc
-from .queue import Queue
+from proc import Proc
+from queue import Queue
 
 
 class Scheduler:
@@ -129,16 +129,17 @@ class Scheduler:
         tt: float = 0.0
         tn: float = 0.0
         r: str = f"*** {self.name} ***\n"
-        r     += "        | Arrival |  Service  |            | Finish | Turnaround |\n"
-        r     += "Process |  Time   | Time (Ts) | Start Time |  Time  |  Time (Tr) |  Tr/Ts\n"
-        r     += "—————————————————————————————————————————————————————————————————————————\n"
+        r += "        | Arrival |  Service  |            | Finish | Turnaround |\n"
+        r += "Process |  Time   | Time (Ts) | Start Time |  Time  |  Time (Tr) |  Tr/Ts\n"
+        r += "—————————————————————————————————————————————————————————————————————————\n"
         for p in sorted(self.finished, key=lambda e: e.id):
             tt += p.turnaround_time()
             tn += p.norm_turnaround()
             r += f"{p}\n"
         tt /= self.total_procs
         tn /= self.total_procs
-        r     += "—————————————————————————————————————————————————————————————————————————\n"
-        r     += "Mean                                                   {0: ^9.02f} | {1: =6.02f}\n".format(tt, tn)
+        r += "—————————————————————————————————————————————————————————————————————————\n"
+        r += "Mean                                                   {0: ^9.02f} | {1: =6.02f}\n".format(
+            tt, tn)
 
         return r

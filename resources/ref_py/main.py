@@ -2,9 +2,9 @@
 
 import sys
 
-from components.scheduler import Scheduler
-from components.srt_scheduler import SRTScheduler
-from components.rr_scheduler import RRScheduler
+from scheduler import Scheduler
+from srt_scheduler import SRTScheduler
+from rr_scheduler import RRScheduler
 
 schedulers = [
     # First-Come-First-Served Scheduler
@@ -19,7 +19,8 @@ schedulers = [
               sys.maxsize),
     # Highest Response Ratio Next
     Scheduler(sys.argv[1], "Highest Response Ratio Next",
-              lambda e, acc: ((e.total_wait() + e.service_time) / e.service_time) > acc,
+              lambda e, acc: (
+                  (e.total_wait() + e.service_time) / e.service_time) > acc,
               lambda e: (e.total_wait() + e.service_time) / e.service_time,
               0),
     # Shortest Remaining Time

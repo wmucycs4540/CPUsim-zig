@@ -1,5 +1,5 @@
-from .scheduler import Scheduler
-from .proc import Proc
+from scheduler import Scheduler
+from proc import Proc
 
 
 class RRScheduler(Scheduler):
@@ -25,7 +25,7 @@ class RRScheduler(Scheduler):
             self.in_context = self.select()
         # switch out process if it needs I/O
         elif len(self.in_context.io_bursts) > 0 and \
-        ((self.in_context.service_time - self.in_context.remaining_time) == self.in_context.io_bursts.peek()[0]):
+                ((self.in_context.service_time - self.in_context.remaining_time) == self.in_context.io_bursts.peek()[0]):
             self.io_wait.enque(self.in_context)
             self.in_context = self.select()
         # switch out process at each time quantum
