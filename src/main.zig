@@ -103,6 +103,32 @@ const Scheduler = struct {
         self.iowait_que.deinit(); self.finished.deinit();
     }
 
+    pub fn print_verbose(self: Self) void {
+        const none: []const u8 = "";
+        const comma: []const u8 = ", ";
+        print("{:>3}: {s} | arrived = {{", .{self.clock, self.current.?.pid });
+        const alen = self.arrival_que.len();
+        for (self.arrival_que.iter()) |a, i| {
+            const end = if ((i + 1) == alen) none else comma;
+            print("{s}{s}", .{a.pid, end});
+        }
+        print("}}", .{});
+        print(" ready = {{", .{});
+        const rlen = self.ready_que.len();
+        for (self.ready_que.iter()) |r, i| {
+            const end = if ((i + 1) == rlen) none else comma;
+            print("{s}{s}", .{r.pid, end});
+        }
+        print("}}", .{});
+        print(" io = {{", .{});
+        const ilen = self.iowait_que.len();
+        for (self.iowait_que.iter()) |io, i| {
+            const end = if ((i + 1) == ilen) none else comma;
+            print("{s}{s}", .{io.pid, end});
+        }
+        print("}}\n", .{});
+    }
+
     /// First-Come-First-Served Scheduler
     fn ffSelect(self: *Self) ?Proc {
         if (self.ready_que.len() == 0) return null;
@@ -204,16 +230,19 @@ const Scheduler = struct {
 
     pub fn tick(self: *Self, gpa: std.mem.Allocator) !bool {
         const new_arrival = self.nextToReadyQueue();
-        if (self.current) |*curr| {
+
+        if (self.current == null) {
+            self.current = self.select();
+        } else if (self.current) |*curr| {
             if (curr.remaining_time <= 0) {
                 curr.finish_time = self.clock;
                 self.finished.enque(curr.*);
                 self.current = self.select();
-            } else if (curr.io_bursts.items.len > 0) {
-                if ((curr.service_time - curr.remaining_time) == curr.io_bursts.items[0][0]) {
-                    self.iowait_que.enque(curr.*);
-                    self.current = self.select();
-                }
+            } else if (curr.io_bursts.items.len > 0
+                and (curr.service_time - curr.remaining_time) == curr.io_bursts.items[0][0])
+            {
+                self.iowait_que.enque(curr.*);
+                self.current = self.select();
             } else if (self.kind == SchedulerKind.rr and curr.time_in_cpu == self.kind.rr.quant) {
                 curr.time_in_cpu = 0;
                 self.ready_que.enque(curr.*);
@@ -222,30 +251,13 @@ const Scheduler = struct {
                 self.ready_que.enque(curr.*);
                 self.current = self.select();
             }
-        } else {
-            self.current = self.select();
         }
 
         if (self.finished.len() == self.total_procs) {
             return false;
         }
 
-        const none: []const u8 = "";
-        const comma: []const u8 = ", ";
-        print("{:>3}: {s} | arrived = {{", .{self.clock, self.current.?.pid });
-        const alen = self.arrival_que.len();
-        for (self.arrival_que.iter()) |a, i| {
-            const end = if ((i + 1) == alen) none else comma;
-            print("{s}{s}", .{a.pid, end});
-        }
-        print("}}", .{});
-        print(" ready = {{", .{});
-        const rlen = self.ready_que.len();
-        for (self.ready_que.iter()) |r, i| {
-            const end = if ((i + 1) == rlen) none else comma;
-            print("{s}{s}", .{r.pid, end});
-        }
-        print("}}\n", .{});
+        self.print_verbose();
 
         self.current.?.remaining_time -= 1;
         self.current.?.time_in_cpu += 1;
