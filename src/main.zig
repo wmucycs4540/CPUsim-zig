@@ -58,16 +58,20 @@ const SchedulerMeta = union(SchedulerKind) {
         select: fn(*Scheduler) ?Proc = Scheduler.ffSelect,
     },
     rr: struct {
+        select: fn(*Scheduler) ?Proc = Scheduler.rrSelect,
         quant: u8,
     },
     sp: struct {
         select: fn(*Scheduler) ?Proc = Scheduler.spSelect,
     },
-    sr: struct {},
+    sr: struct {
+        select: fn(*Scheduler) ?Proc = Scheduler.srSelect,
+    },
     hr: struct {
         select: fn(*Scheduler) ?Proc = Scheduler.hrSelect,
     },
     fb: struct {
+        select: fn(*Scheduler) ?Proc = Scheduler.fbSelect,
         quant: u8,
     }
 };
@@ -101,6 +105,7 @@ const Scheduler = struct {
         self.iowait_que.deinit(); self.finished.deinit();
     }
 
+    /// First-Come-First-Served Scheduler
     fn ffSelect(self: *Self) ?Proc {
         if (self.ready_que.items.len == 0) return null;
         var cmp = @as(u64, 0);
@@ -113,6 +118,14 @@ const Scheduler = struct {
         }
         return self.ready_que.orderedRemove(idx);
     }
+
+    /// Round Robbin (with quant)
+    fn rrSelect(self: *Self) ?Proc {
+        if (self.ready_que.items.len == 0) return null;
+        return self.ready_que.orderedRemove(0);
+    }
+
+    /// Shortest Process Next Scheduler
     fn spSelect(self: *Self) ?Proc {
         if (self.ready_que.items.len == 0) return null;
         var cmp = @as(u64, std.math.maxInt(u64));
@@ -125,6 +138,22 @@ const Scheduler = struct {
         }
         return self.ready_que.orderedRemove(idx);
     }
+
+    /// Shortest Remaining Time
+    fn srSelect(self: *Self) ?Proc {
+        if (self.ready_que.items.len == 0) return null;
+        var cmp = @as(u64, std.math.maxInt(u64));
+        var idx = @as(u64, 0);
+        for (self.ready_que.items) |proc, i| {
+            if (proc.remaining_time < cmp) {
+                cmp = proc.remaining_time;
+                idx = i;
+            }
+        }
+        return self.ready_que.orderedRemove(idx);
+    }
+
+    /// Highest Response Ratio Next
     fn hrSelect(self: *Self) ?Proc {
         if (self.ready_que.items.len == 0) return null;
         var cmp = @as(u64, 0);
@@ -139,21 +168,31 @@ const Scheduler = struct {
         return self.ready_que.orderedRemove(idx);
     }
 
-    pub fn nextToReadyQueue(self: *Self) void {
+    /// Facebook
+    fn fbSelect(self: *Self) ?Proc {
+        _ = self;
+        unreachable;
+    }
+
+    pub fn nextToReadyQueue(self: *Self) bool {
         const index = loop: for (self.arrival_que.items) |p, i| {
             if (p.arrival_time <= self.clock) {
                 break :loop i;
             }
-        } else return;
+        } else return false;
 
         self.ready_que.append(self.arrival_que.orderedRemove(index)) catch unreachable;
+        return true;
     }
 
     fn select(self: *Self) ?Proc {
         var proc = switch (self.kind) {
             .ff => |ff_sel| ff_sel.select(self),
+            .rr => |rr_sel| rr_sel.select(self),
             .sp => |sp_sel| sp_sel.select(self),
+            .sr => |sr_sel| sr_sel.select(self),
             .hr => |hr_sel| hr_sel.select(self),
+            // .fb => |fb_sel| fb_sel.select(self),
             else => unreachable,
         };
         if (proc) |*p| p.start_time = self.clock;
@@ -161,7 +200,7 @@ const Scheduler = struct {
     }
 
     pub fn tick(self: *Self, gpa: std.mem.Allocator) !bool {
-        self.nextToReadyQueue();
+        const new_arrival = self.nextToReadyQueue();
         if (self.current) |*curr| {
             if (curr.remaining_time <= 0) {
                 curr.finish_time = self.clock;
@@ -171,6 +210,13 @@ const Scheduler = struct {
                 and (curr.service_time - curr.remaining_time) == curr.io_bursts.items[0][0]
             ) {
                 try self.iowait_que.append(curr.*);
+                self.current = self.select();
+            } else if (self.kind == SchedulerKind.rr and curr.time_in_cpu == self.kind.rr.quant) {
+                curr.time_in_cpu = 0;
+                try self.ready_que.append(curr.*);
+                self.current = self.select();
+            } else if (self.kind == SchedulerKind.sr and new_arrival) {
+                try self.ready_que.append(curr.*);
                 self.current = self.select();
             }
         } else {
@@ -182,6 +228,7 @@ const Scheduler = struct {
         }
 
         self.current.?.remaining_time -= 1;
+        self.current.?.time_in_cpu += 1;
 
         for (self.ready_que.items) |*ready| {
             ready.time_in_ready += 1;
@@ -233,7 +280,7 @@ const Scheduler = struct {
         }
         tt /= @intToFloat(f32, self.total_procs);
         tn /= @intToFloat(f32, self.total_procs);
-        try string.appendSlice(try std.fmt.allocPrint(gpa, "Mean turnaround: {d:.2} Mean normalized: {d:.2}", .{tt, tn}));
+        try string.appendSlice(try std.fmt.allocPrint(gpa, "{d:.2}, {d:.2}", .{tt, tn}));
         return string.toOwnedSlice();
     }
 };
