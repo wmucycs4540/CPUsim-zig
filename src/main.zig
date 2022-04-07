@@ -139,15 +139,14 @@ const Scheduler = struct {
         return self.ready_que.orderedRemove(idx);
     }
 
-    pub fn nextToReadyQueue(self: *Self) bool {
+    pub fn nextToReadyQueue(self: *Self) void {
         const index = loop: for (self.arrival_que.items) |p, i| {
             if (p.arrival_time <= self.clock) {
                 break :loop i;
             }
-        } else return false;
-        // print("{}", .{self.arrival_que.items[index]});
-        self.ready_que.append(self.arrival_que.orderedRemove(index)) catch return false;
-        return true;
+        } else return;
+
+        self.ready_que.append(self.arrival_que.orderedRemove(index)) catch unreachable;
     }
 
     fn select(self: *Self) ?Proc {
@@ -162,17 +161,14 @@ const Scheduler = struct {
     }
 
     pub fn tick(self: *Self, gpa: std.mem.Allocator) !bool {
-        if (!self.nextToReadyQueue()) {
-            // return false;
-        }
-
+        self.nextToReadyQueue();
         if (self.current) |*curr| {
             if (curr.remaining_time <= 0) {
                 curr.finish_time = self.clock;
                 try self.finished.append(curr.*);
                 self.current = self.select();
-            } else if (curr.io_bursts.items.len > 0 and
-                (curr.service_time - curr.remaining_time) == curr.io_bursts.items[0][0]
+            } else if (curr.io_bursts.items.len > 0
+                and (curr.service_time - curr.remaining_time) == curr.io_bursts.items[0][0]
             ) {
                 try self.iowait_que.append(curr.*);
                 self.current = self.select();
@@ -219,20 +215,26 @@ const Scheduler = struct {
 
     pub fn resultToString(self: Self, gpa: std.mem.Allocator) ![]u8 {
         var string = std.ArrayList(u8).init(gpa);
+        var tt = @as(f32, 0.0);
+        var tn = @as(f32, 0.0);
         for (self.finished.items) |proc| {
             print("{}\n", .{proc});
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "\"{s}\",", .{proc.pid}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.arrival_time}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.service_time}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.start_time}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.total_wait()}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.finish_time}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.turnaround_time()}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "\"{s}\", ", .{proc.pid}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.arrival_time}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.service_time}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.start_time}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.total_wait()}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.finish_time}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.turnaround_time()}));
             try string.appendSlice(try std.fmt.allocPrint(gpa, "{d:.2}", .{proc.norm_turnaround()}));
             try string.appendSlice("\n");
-
+            tt += @intToFloat(f32, proc.turnaround_time());
+            tn += proc.norm_turnaround();
         }
-        return string.items;
+        tt /= @intToFloat(f32, self.total_procs);
+        tn /= @intToFloat(f32, self.total_procs);
+        try string.appendSlice(try std.fmt.allocPrint(gpa, "Mean turnaround: {d:.2} Mean normalized: {d:.2}", .{tt, tn}));
+        return string.toOwnedSlice();
     }
 };
 
