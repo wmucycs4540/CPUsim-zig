@@ -38,8 +38,8 @@ const Proc = struct {
     pub fn turnaround_time(self: Self) u64 {
         return self.finish_time - self.arrival_time;
     }
-    pub fn norm_turnaround(self: Self) u64 {
-        return self.turnaround_time() / self.service_time;
+    pub fn norm_turnaround(self: Self) f32 {
+        return @intToFloat(f32, self.turnaround_time()) / @intToFloat(f32, self.service_time);
     }
 
     pub fn total_wait(self: Self) u64 {
@@ -58,16 +58,20 @@ const SchedulerMeta = union(SchedulerKind) {
         select: fn(*Scheduler) ?Proc = Scheduler.ffSelect,
     },
     rr: struct {
+        select: fn(*Scheduler) ?Proc = Scheduler.rrSelect,
         quant: u8,
     },
     sp: struct {
         select: fn(*Scheduler) ?Proc = Scheduler.spSelect,
     },
-    sr: struct {},
+    sr: struct {
+        select: fn(*Scheduler) ?Proc = Scheduler.srSelect,
+    },
     hr: struct {
         select: fn(*Scheduler) ?Proc = Scheduler.hrSelect,
     },
     fb: struct {
+        select: fn(*Scheduler) ?Proc = Scheduler.fbSelect,
         quant: u8,
     }
 };
@@ -101,6 +105,7 @@ const Scheduler = struct {
         self.iowait_que.deinit(); self.finished.deinit();
     }
 
+    /// First-Come-First-Served Scheduler
     fn ffSelect(self: *Self) ?Proc {
         if (self.ready_que.items.len == 0) return null;
         var cmp = @as(u64, 0);
@@ -113,6 +118,14 @@ const Scheduler = struct {
         }
         return self.ready_que.orderedRemove(idx);
     }
+
+    /// Round Robbin (with quant)
+    fn rrSelect(self: *Self) ?Proc {
+        if (self.ready_que.items.len == 0) return null;
+        return self.ready_que.orderedRemove(0);
+    }
+
+    /// Shortest Process Next Scheduler
     fn spSelect(self: *Self) ?Proc {
         if (self.ready_que.items.len == 0) return null;
         var cmp = @as(u64, std.math.maxInt(u64));
@@ -125,6 +138,22 @@ const Scheduler = struct {
         }
         return self.ready_que.orderedRemove(idx);
     }
+
+    /// Shortest Remaining Time
+    fn srSelect(self: *Self) ?Proc {
+        if (self.ready_que.items.len == 0) return null;
+        var cmp = @as(u64, std.math.maxInt(u64));
+        var idx = @as(u64, 0);
+        for (self.ready_que.items) |proc, i| {
+            if (proc.remaining_time < cmp) {
+                cmp = proc.remaining_time;
+                idx = i;
+            }
+        }
+        return self.ready_que.orderedRemove(idx);
+    }
+
+    /// Highest Response Ratio Next
     fn hrSelect(self: *Self) ?Proc {
         if (self.ready_que.items.len == 0) return null;
         var cmp = @as(u64, 0);
@@ -139,40 +168,55 @@ const Scheduler = struct {
         return self.ready_que.orderedRemove(idx);
     }
 
+    /// Facebook
+    fn fbSelect(self: *Self) ?Proc {
+        _ = self;
+        unreachable;
+    }
+
     pub fn nextToReadyQueue(self: *Self) bool {
         const index = loop: for (self.arrival_que.items) |p, i| {
             if (p.arrival_time <= self.clock) {
                 break :loop i;
             }
         } else return false;
-        // print("{}", .{self.arrival_que.items[index]});
-        self.ready_que.append(self.arrival_que.orderedRemove(index)) catch return false;
+
+        self.ready_que.append(self.arrival_que.orderedRemove(index)) catch unreachable;
         return true;
     }
 
     fn select(self: *Self) ?Proc {
-        return switch (self.kind) {
+        var proc = switch (self.kind) {
             .ff => |ff_sel| ff_sel.select(self),
+            .rr => |rr_sel| rr_sel.select(self),
             .sp => |sp_sel| sp_sel.select(self),
+            .sr => |sr_sel| sr_sel.select(self),
             .hr => |hr_sel| hr_sel.select(self),
+            // .fb => |fb_sel| fb_sel.select(self),
             else => unreachable,
         };
+        if (proc) |*p| p.start_time = self.clock;
+        return proc;
     }
 
     pub fn tick(self: *Self, gpa: std.mem.Allocator) !bool {
-        if (!self.nextToReadyQueue()) {
-            // return false;
-        }
-
+        const new_arrival = self.nextToReadyQueue();
         if (self.current) |*curr| {
             if (curr.remaining_time <= 0) {
                 curr.finish_time = self.clock;
                 try self.finished.append(curr.*);
                 self.current = self.select();
-            } else if (curr.io_bursts.items.len > 0 and
-                (curr.service_time - curr.remaining_time) == curr.io_bursts.items[0][0]
+            } else if (curr.io_bursts.items.len > 0
+                and (curr.service_time - curr.remaining_time) == curr.io_bursts.items[0][0]
             ) {
                 try self.iowait_que.append(curr.*);
+                self.current = self.select();
+            } else if (self.kind == SchedulerKind.rr and curr.time_in_cpu == self.kind.rr.quant) {
+                curr.time_in_cpu = 0;
+                try self.ready_que.append(curr.*);
+                self.current = self.select();
+            } else if (self.kind == SchedulerKind.sr and new_arrival) {
+                try self.ready_que.append(curr.*);
                 self.current = self.select();
             }
         } else {
@@ -184,6 +228,7 @@ const Scheduler = struct {
         }
 
         self.current.?.remaining_time -= 1;
+        self.current.?.time_in_cpu += 1;
 
         for (self.ready_que.items) |*ready| {
             ready.time_in_ready += 1;
@@ -217,20 +262,26 @@ const Scheduler = struct {
 
     pub fn resultToString(self: Self, gpa: std.mem.Allocator) ![]u8 {
         var string = std.ArrayList(u8).init(gpa);
+        var tt = @as(f32, 0.0);
+        var tn = @as(f32, 0.0);
         for (self.finished.items) |proc| {
             print("{}\n", .{proc});
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "\"{s}\",", .{proc.pid}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.arrival_time}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.service_time}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.start_time}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.total_wait()}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.finish_time}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.turnaround_time()}));
-            try string.appendSlice(try std.fmt.allocPrint(gpa, "{},", .{proc.norm_turnaround()}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "\"{s}\", ", .{proc.pid}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.arrival_time}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.service_time}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.start_time}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.total_wait()}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.finish_time}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{}, ", .{proc.turnaround_time()}));
+            try string.appendSlice(try std.fmt.allocPrint(gpa, "{d:.2}", .{proc.norm_turnaround()}));
             try string.appendSlice("\n");
-
+            tt += @intToFloat(f32, proc.turnaround_time());
+            tn += proc.norm_turnaround();
         }
-        return string.items;
+        tt /= @intToFloat(f32, self.total_procs);
+        tn /= @intToFloat(f32, self.total_procs);
+        try string.appendSlice(try std.fmt.allocPrint(gpa, "{d:.2}, {d:.2}", .{tt, tn}));
+        return string.toOwnedSlice();
     }
 };
 
@@ -277,29 +328,38 @@ pub fn main() !void {
     var processes = std.ArrayList(Proc).init(gpa);
     defer processes.deinit();
     while (try file_reader.readUntilDelimiterOrEofAlloc(gpa, '\n', std.math.maxInt(u16))) |line| {
+        if (std.mem.startsWith(u8, line, "#") or std.mem.startsWith(u8, line, "\n") or line.len == 0) {
+            continue;
+        }
         var splitter = std.mem.split(u8, line, ",");
+        var proc_pid = splitter.next() orelse return Error.InvalidInput;
+        // Strip BOM (byte order mark) from input_simple.csv
+        if (std.mem.startsWith(u8, proc_pid, @as([]const u8, &.{239, 187, 191 }))) {
+            proc_pid = proc_pid[3..];
+        }
+        proc_pid = std.mem.trim(u8, proc_pid, "\"");
 
-        const tok1 = splitter.next() orelse return Error.InvalidInput;
+        var ariv_str = splitter.next() orelse { print("`{s}`\n", .{line}); return Error.InvalidInput; };
+        ariv_str = std.mem.trim(u8, ariv_str, " ");
+        const arrival = std.fmt.parseInt(u64, ariv_str, 10) catch {
+            print("`{s}`\n", .{ariv_str});
+            return Error.ParseInt;
+        };
+        var serv_str = splitter.next() orelse { print("`{s}`\n", .{line}); return Error.InvalidInput; };
+        serv_str = std.mem.trim(u8, serv_str, " ");
+        const service = std.fmt.parseInt(u64, serv_str, 10) catch {
+            print("`{s}`\n", .{serv_str});
+            return Error.ParseInt;
+        };
 
-        const arrival = try std.fmt.parseInt(
-            u64,
-            splitter.next() orelse return Error.InvalidInput,
-            10
-        );
-        const service = try std.fmt.parseInt(
-            u64,
-            splitter.next() orelse return Error.InvalidInput,
-            10
-        );
-
-        if (std.mem.eql(u8, tok1, " ")) {
+        if (std.mem.eql(u8, proc_pid, " ") or proc_pid.len == 0) {
             const last = processes.items.len - 1;
             try processes.items[last].io_bursts.append(.{arrival, service});
-        } else if (!std.mem.eql(u8, tok1, "") and tok1.len == 1) {
-            const p = Proc.init(gpa, try gpa.dupe(u8, tok1), arrival, service);
+        } else if (proc_pid.len == 1) {
+            const p = Proc.init(gpa, try gpa.dupe(u8, proc_pid), arrival, service);
             try processes.append(p);
         } else {
-            print("{any} {}\n", .{tok1, tok1.len});
+            print("`{s}`\n", .{proc_pid});
             return Error.InvalidInput;
         }
     }
