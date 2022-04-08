@@ -276,6 +276,7 @@ const Scheduler = struct {
                 try removed.append(i);
             }
         }
+
         for (removed.items) |idx| {
             self.ready_que.enque(self.iowait_que.deque_at(idx).?);
         }
@@ -367,18 +368,12 @@ pub fn main() !void {
         }
         proc_pid = std.mem.trim(u8, proc_pid, "\"");
 
-        var ariv_str = splitter.next() orelse { print("`{s}`\n", .{line}); return Error.InvalidInput; };
+        var ariv_str = splitter.next() orelse return Error.InvalidInput;
         ariv_str = std.mem.trim(u8, ariv_str, " ");
-        const arrival = std.fmt.parseInt(u64, ariv_str, 10) catch {
-            print("`{s}`\n", .{ariv_str});
-            return Error.ParseInt;
-        };
-        var serv_str = splitter.next() orelse { print("`{s}`\n", .{line}); return Error.InvalidInput; };
+        const arrival = std.fmt.parseInt(u64, ariv_str, 10) catch return Error.ParseInt;
+        var serv_str = splitter.next() orelse return Error.InvalidInput;
         serv_str = std.mem.trim(u8, serv_str, " ");
-        const service = std.fmt.parseInt(u64, serv_str, 10) catch {
-            print("`{s}`\n", .{serv_str});
-            return Error.ParseInt;
-        };
+        const service = std.fmt.parseInt(u64, serv_str, 10) catch return Error.ParseInt;
 
         if (std.mem.eql(u8, proc_pid, " ") or proc_pid.len == 0) {
             const last = processes.len() - 1;
@@ -387,7 +382,6 @@ pub fn main() !void {
             const p = Proc.init(gpa, try gpa.dupe(u8, proc_pid), arrival, service);
             processes.enque(p);
         } else {
-            print("`{s}`\n", .{proc_pid});
             return Error.InvalidInput;
         }
     }
@@ -396,8 +390,10 @@ pub fn main() !void {
     try sched.run(gpa);
     const info = try sched.resultToString(gpa);
 
-    const out_file = try std.fs.cwd().createFile(output, .{ .read = true });
-    defer out_file.close();
+    print("{s}\n{s}", .{info, output});
 
-    _ = try out_file.writeAll(info);
+    // const out_file = try std.fs.cwd().createFile(output, .{ .read = true });
+    // defer out_file.close();
+
+    // _ = try out_file.writeAll(info);
 }
