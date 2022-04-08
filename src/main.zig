@@ -192,7 +192,8 @@ const Scheduler = struct {
         return self.ready_que.deque_at(idx);
     }
 
-    /// Facebook
+    // TODO: Still needs to be implemented
+    /// Feedback
     fn fbSelect(self: *Self) ?Proc {
         _ = self;
         unreachable;
@@ -204,7 +205,6 @@ const Scheduler = struct {
                 break :loop i;
             }
         } else return false;
-
         self.ready_que.enque(self.arrival_que.deque_at(index).?);
         return true;
     }
@@ -216,8 +216,7 @@ const Scheduler = struct {
             .sp => |sp_sel| sp_sel.select(self),
             .sr => |sr_sel| sr_sel.select(self),
             .hr => |hr_sel| hr_sel.select(self),
-            // .fb => |fb_sel| fb_sel.select(self),
-            else => unreachable,
+            .fb => |fb_sel| fb_sel.select(self),
         };
         if (proc) |*p| {
             if (!p.started) {
@@ -250,6 +249,11 @@ const Scheduler = struct {
             } else if (self.kind == SchedulerKind.sr and new_arrival) {
                 self.ready_que.enque(curr.*);
                 self.current = self.select();
+            } else if (self.kind == SchedulerKind.fb) {
+                // TODO: put the logic for feed back queue here
+                // Add any vaiables needed (see new_arrival and self.current.?.time_in_cpu
+                // their only used for the specific scheduler)
+                unreachable;
             }
         }
 
