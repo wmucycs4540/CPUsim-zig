@@ -22,6 +22,7 @@ const Proc = struct {
     time_in_io_wait: u64 = 0,
     time_in_cpu: u64 = 0,
     io_bursts: std.ArrayList([2] u64),
+    prio_val: u64 = 0
 
     pub fn init(gpa: std.mem.Allocator, pid: []const u8, arrival: u64, service: u64) Self {
         return Self {
@@ -196,6 +197,7 @@ const Scheduler = struct {
     /// Feedback
     fn fbSelect(self: *Self) ?Proc {
         _ = self;
+
         unreachable;
     }
 
@@ -249,11 +251,29 @@ const Scheduler = struct {
             } else if (self.kind == SchedulerKind.sr and new_arrival) {
                 self.ready_que.enque(curr.*);
                 self.current = self.select();
-            } else if (self.kind == SchedulerKind.fb) {
+            } else if (self.kind == SchedulerKind.fb and curr.time_in_cpu == self.kind.fb.quant) {
                 // TODO: put the logic for feed back queue here
                 // Add any vaiables needed (see new_arrival and self.current.?.time_in_cpu
                 // their only used for the specific scheduler)
-                unreachable;
+
+                // switch out process at each time quantum, and increase prio_val
+                if (self.prio_val == 0) {
+                    curr.time_in_cpu = 0;
+                    self.ready_que.enque(curr.*);
+                    self.current = self.select();
+                    self.prio_val += 1;
+                } else if (self.prio_val == 1) {
+                    self.kind.fb.quant *= 2;
+                    curr.time_in_cpu = 0;
+                    self.ready_que.enque(curr.*);
+                    self.current = self.select();
+                    self.prio_val += 1;
+                } else if (self.prio_val == 2) {
+                    self.kind.fb.quant *= 3;
+                    curr.time_in_cpu = 0;
+                    self.ready_que.enque(curr.*);
+                    self.current = self.select();
+                }
             }
         }
 
